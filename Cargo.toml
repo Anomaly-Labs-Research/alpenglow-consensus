@@ -1,0 +1,22 @@
+[package]
+name = "alpenglow-consensus"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.23.0", features = ["derive"] }
+crossbeam = "0.8.4"
+quinn = "0.11.8"
+serde = { version = "1.0.219", features = ["derive"] }
+solana-keypair = "2.2.1"
+solana-pubkey = { version = "2.4.0" }
+solana-signature = "2.3.0"
+solana-signer = "2.2.1"
+tokio = { version = "1.45.1", features = [
+    "macros",
+    "rt-multi-thread",
+    "io-std",
+] }
+toml = "0.8.22"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
