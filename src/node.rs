@@ -16,13 +16,13 @@ pub struct Node {
     stake: u64,
 }
 
-impl Debug for Node {
+impl Debug for SolanaNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
             format!(
-                "Node:\n    Pubkey : {}\n    Stake : {}",
+                "SolanaNode:\n    Pubkey : {}\n    Stake : {}",
                 self.pubkey(),
                 self.stake()
             )
@@ -30,13 +30,13 @@ impl Debug for Node {
     }
 }
 
-impl Display for Node {
+impl Display for SolanaNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
             format!(
-                "Node:\n    Pubkey : {}\n    Stake : {}",
+                "SolanaNode:\n    Pubkey : {}\n    Stake : {}",
                 self.pubkey(),
                 self.stake()
             )
@@ -44,14 +44,16 @@ impl Display for Node {
     }
 }
 
-pub trait NodeIden {
-    fn pubkey(&self) -> Pubkey;
-    fn sign_message(&self, message: &[u8]) -> Signature;
+pub trait AlpenGlowNode {
+    type Pubkey;
+    type Signature;
+    fn pubkey(&self) -> Self::Pubkey;
+    fn sign_message(&self, message: &[u8]) -> Self::Signature;
     fn verify_sig(sig: Signature, pubkey: Pubkey, message: &[u8]) -> bool;
 }
 
-impl Node {
-    pub fn init(config: &AlpenGlowConfig) -> AlpenGlowResult<Self> {
+impl SolanaNode {
+    pub fn init(config:&AlpenGlowConfig) -> AlpenGlowResult<Self> {
         Ok(Self {
             keypair: Keypair::read_from_file(config.ed25519_key_path())
                 .map_err(|_| AlpenGlowError::InvalidKeypair)?,
@@ -73,14 +75,16 @@ impl Node {
 
     pub fn log(&self) {
         info!(
-            "Node {} initialized with stake {}",
+            "SolanaNode {} initialized with stake {}",
             self.pubkey().to_string(),
             self.stake()
         )
     }
 }
 
-impl NodeIden for Node {
+impl AlpenGlowNode for SolanaNode {
+    type Pubkey = solana_pubkey::Pubkey;
+    type Signature = solana_signature::Signature;
     fn pubkey(&self) -> Pubkey {
         self.keypair.pubkey()
     }
