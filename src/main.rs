@@ -16,15 +16,19 @@ fn main() -> AlpenGlowResult<()> {
 
     let config = AlpenGlowConfig::parse();
 
-    let _node = SolanaNode::init(&config)?;
+    println!("config {:?}", config);
 
-    let (rx, quic_handle) = QuicServer::spawn(config)?;
+    let (_node, _msgs_receiver) = SolanaNode::init(&config)?;
+
+    // let quic_client_handle = QuicClient::spawn::<SolanaMessage>(&config, msgs_receiver);
+
+    let (quic_server_handle, rx) = QuicServer::spawn(&config)?;
 
     let message_pool = SolanaMessagePool::init();
 
     let message_handle = MessageProcesser::spawn_with_receiver::<SolanaMessage>(rx, message_pool);
 
-    for h in [quic_handle, message_handle] {
+    for h in [quic_server_handle, message_handle] {
         h.join().expect("err joining thread");
     }
 

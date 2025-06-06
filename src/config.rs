@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::{fs, sync::Arc};
+use std::{fs, net::SocketAddr, str::FromStr, sync::Arc};
 
 #[derive(Debug, Deserialize)]
 struct ServerConfigToml {
@@ -45,12 +45,20 @@ impl AlpenGlowConfig {
         format!("{}:{}", self.server_addr(), self.server_port())
     }
 
+    pub fn server_socket_addr(&self) -> SocketAddr {
+        SocketAddr::from_str(&self.server_addr_with_port()).expect("invalid socket address")
+    }
+
     pub fn client_port(&self) -> u16 {
         self.client.port
     }
 
     pub fn client_addr(&self) -> String {
         self.client.host.to_string()
+    }
+
+    pub fn client_socket_addr(&self) -> SocketAddr {
+        SocketAddr::from_str(&self.client_addr_with_port()).expect("invalid socket address")
     }
 
     pub fn client_addr_with_port(&self) -> String {
