@@ -3,12 +3,13 @@ use std::{
     str::FromStr,
     sync::Arc,
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use crate::{
     config::AlpenGlowConfig,
     error::{AlpenGlowError, AlpenGlowResult},
-    message::{MAX_MESSAGE_LEN_BYTES, TxMessage},
+    message::AlpenGlowMessage,
 };
 use crossbeam::channel::{Receiver, Sender};
 use quinn::{
@@ -24,6 +25,8 @@ use tracing::{error, info};
 pub const CLOSE_CONN_MESSAGE: &[u8] = b"CLOSE_CONN";
 
 pub const CLOSE_CONN_CODE: VarInt = VarInt::from_u32(0);
+
+pub const MAX_QUIC_MESSAGE_BYTES: u16 = 1024;
 
 pub struct QuicServer;
 
@@ -44,7 +47,7 @@ impl QuicServer {
                 .block_on(Self::spawn_inner(config, tx))
             {
                 Ok(_) => {}
-                Err(e) => println!("err {:?}", e),
+                Err(e) => error!("err {:?}", e),
             }
         });
         Ok((rx, handle))
@@ -81,30 +84,41 @@ impl QuicServer {
 
         info!("quick server running at {}", config.server_addr_with_port());
 
+        let mut join_handles = Vec::new();
         while let Some(connecting) = server.accept().await {
             let tx = tx.clone();
-            tokio::spawn(async move {
-                let connection = connecting.await.unwrap();
-                info!("incoming conn from {}", connection.remote_address());
-                loop {
-                    match connection.accept_uni().await {
-                        Ok(mut recv) => {
-                            match recv.read_to_end(MAX_MESSAGE_LEN_BYTES as usize).await {
-                                Ok(d) => match tx.send(d) {
-                                    Ok(_) => {}
-                                    Err(e) => error!("chan : send_err {}", e),
-                                },
-                                Err(e) => error!("err reading bytes {}", e),
+            let handle = tokio::spawn(async move {
+                match connecting.await {
+                    Ok(connection) => {
+                        info!("incoming conn from {}", connection.remote_address());
+                        loop {
+                            match connection.accept_uni().await {
+                                Ok(mut recv) => {
+                                    match recv.read_to_end(MAX_QUIC_MESSAGE_BYTES as usize).await {
+                                        Ok(d) => match tx.send(d) {
+                                            Ok(_) => {}
+                                            Err(e) => error!("chan : send_err {}", e),
+                                        },
+                                        Err(e) => error!("err reading bytes {}", e),
+                                    }
+                                }
+                                Err(e) => {
+                                    connection.close(CLOSE_CONN_CODE, CLOSE_CONN_MESSAGE);
+                                    error!("closing conn - {}", e.to_string());
+                                    break;
+                                }
                             }
                         }
-                        Err(e) => {
-                            connection.close(CLOSE_CONN_CODE, CLOSE_CONN_MESSAGE);
-                            error!("closing conn due to {}", e.to_string());
-                            break;
-                        }
                     }
+                    Err(e) => error!("connection - {}", e),
                 }
             });
+
+            join_handles.push(handle);
+        }
+
+        for i in join_handles {
+            let _ = i.await;
         }
 
         Ok(())
@@ -140,9 +154,9 @@ impl QuicClient {
         &self.0
     }
 
-    pub async fn send_data(
+    pub async fn send_msgs(
         &self,
-        data: &[impl TxMessage],
+        data: &[impl AlpenGlowMessage],
         receiver: SocketAddr,
     ) -> AlpenGlowResult<()> {
         let bytes = data.into_iter().flat_map(|d| d.pack()).collect::<Vec<u8>>();
@@ -155,18 +169,16 @@ impl QuicClient {
             .await
             .unwrap();
 
-        println!("connected -> {}", connection.remote_address());
+        info!("connected -> {}", connection.remote_address());
 
         if let Ok(mut send) = connection.open_uni().await {
-            println!(
-                "data {}",
-                String::from_utf8(bytes.to_vec()).unwrap_or("".to_string())
-            );
             match send.write(bytes.as_slice()).await {
-                Ok(len) => println!("Sent {} bytes Successfully", len),
-                Err(e) => println!("error sending {}", e),
+                Ok(len) => info!("Sent {} bytes Successfully", len),
+                Err(e) => error!("error sending {}", e),
             }
         }
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         Ok(())
     }
@@ -234,7 +246,10 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
 mod tests {
     use std::{net::SocketAddr, str::FromStr};
 
-    use crate::{config::AlpenGlowConfig, message::AlpenGlowMessage, network::QuicClient};
+    use crate::{
+        config::AlpenGlowConfig, message::solana_alpenglow_message::SolanaMessage,
+        network::QuicClient,
+    };
 
     // need to spawn the server in a sep thread
     #[tokio::test]
@@ -244,11 +259,14 @@ mod tests {
 
         let client = QuicClient::build(&config).await;
 
-        let input = "hello";
+        let input = "hello".as_bytes().to_vec();
 
         client
-            .send_data(
-                &[AlpenGlowMessage::from_str(&input)],
+            .send_msgs(
+                &[SolanaMessage::from_bytes_and_type(
+                    input,
+                    crate::message::MessageType::Ping,
+                )],
                 SocketAddr::from_str(&config.server_addr_with_port()).unwrap(),
             )
             .await
