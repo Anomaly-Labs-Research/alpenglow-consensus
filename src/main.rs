@@ -1,6 +1,12 @@
 use alpenglow_consensus::{
-    config::AlpenGlowConfig, error::AlpenGlowResult, message::MessageProcesser,
-    network::QuicServer, node::Node,
+    config::AlpenGlowConfig,
+    error::AlpenGlowResult,
+    message::{
+        MessageProcesser,
+        solana_alpenglow_message::{SolanaMessage, SolanaMessagePool},
+    },
+    network::QuicServer,
+    node::solana_alpenglow_node::SolanaNode,
 };
 
 fn main() -> AlpenGlowResult<()> {
@@ -10,13 +16,13 @@ fn main() -> AlpenGlowResult<()> {
 
     let config = AlpenGlowConfig::parse();
 
-    let node = Node::init(&config)?;
-
-    node.log();
+    let _node = SolanaNode::init(&config)?;
 
     let (rx, quic_handle) = QuicServer::spawn(config)?;
 
-    let message_handle = MessageProcesser::spawn_with_receiver(rx);
+    let message_pool = SolanaMessagePool::init();
+
+    let message_handle = MessageProcesser::spawn_with_receiver::<SolanaMessage>(rx, message_pool);
 
     for h in [quic_handle, message_handle] {
         h.join().expect("err joining thread");

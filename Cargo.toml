@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bs58 = "0.5.1"
 bytemuck = { version = "1.23.0", features = ["derive"] }
 crossbeam = "0.8.4"
 quinn = "0.11.8"

@@ -8,7 +8,7 @@ use std::{
 use crate::{
     config::AlpenGlowConfig,
     error::{AlpenGlowError, AlpenGlowResult},
-    message::{MAX_MESSAGE_LEN_BYTES, TxMessage},
+    message::AlpenGlowMessage,
 };
 use crossbeam::channel::{Receiver, Sender};
 use quinn::{
@@ -24,6 +24,8 @@ use tracing::{error, info};
 pub const CLOSE_CONN_MESSAGE: &[u8] = b"CLOSE_CONN";
 
 pub const CLOSE_CONN_CODE: VarInt = VarInt::from_u32(0);
+
+pub const MAX_QUIC_MESSAGE_BYTES: u16 = 1024;
 
 pub struct QuicServer;
 
@@ -89,7 +91,7 @@ impl QuicServer {
                 loop {
                     match connection.accept_uni().await {
                         Ok(mut recv) => {
-                            match recv.read_to_end(MAX_MESSAGE_LEN_BYTES as usize).await {
+                            match recv.read_to_end(MAX_QUIC_MESSAGE_BYTES as usize).await {
                                 Ok(d) => match tx.send(d) {
                                     Ok(_) => {}
                                     Err(e) => error!("chan : send_err {}", e),
@@ -140,9 +142,9 @@ impl QuicClient {
         &self.0
     }
 
-    pub async fn send_data(
+    pub async fn send_msgs(
         &self,
-        data: &[impl TxMessage],
+        data: &[impl AlpenGlowMessage],
         receiver: SocketAddr,
     ) -> AlpenGlowResult<()> {
         let bytes = data.into_iter().flat_map(|d| d.pack()).collect::<Vec<u8>>();
@@ -234,7 +236,10 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
 mod tests {
     use std::{net::SocketAddr, str::FromStr};
 
-    use crate::{config::AlpenGlowConfig, message::AlpenGlowMessage, network::QuicClient};
+    use crate::{
+        config::AlpenGlowConfig, message::solana_alpenglow_message::SolanaMessage,
+        network::QuicClient,
+    };
 
     // need to spawn the server in a sep thread
     #[tokio::test]
@@ -244,11 +249,14 @@ mod tests {
 
         let client = QuicClient::build(&config).await;
 
-        let input = "hello";
+        let input = "hello".as_bytes().to_vec();
 
         client
-            .send_data(
-                &[AlpenGlowMessage::from_str(&input)],
+            .send_msgs(
+                &[SolanaMessage::from_bytes_and_type(
+                    input,
+                    crate::message::MessageType::Ping,
+                )],
                 SocketAddr::from_str(&config.server_addr_with_port()).unwrap(),
             )
             .await
