@@ -11,7 +11,7 @@ openssl req -x509 -newkey rsa:4096 -keyout rsa-key.pem -out rsa-cert.pem -days 3
 - ### Generate ed25519 keyapir json
 
 ```sh
-solana-keygen new --outfile ./keys/iden.json
+solana-keygen new --outfile iden.json
 ```
 
 ## Run
