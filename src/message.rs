@@ -75,20 +75,21 @@ pub struct MessageProcesser;
 
 impl MessageProcesser {
     pub fn spawn_with_receiver<T: AlpenGlowMessage>(
-        rx: Receiver<Vec<u8>>,
+        msg_receiver: &Receiver<Vec<u8>>,
         message_pool: Arc<RwLock<impl AlpenGlowMessagePool<Message = T> + 'static>>,
     ) -> JoinHandle<()> {
         info!("spawn : messagsProcesserThread");
         let message_pool = Arc::clone(&message_pool);
+        let msg_receiver = msg_receiver.clone();
         thread::spawn(move || {
-            while let Ok(m) = rx.recv() {
+            while let Ok(m) = msg_receiver.recv() {
                 match T::unpack_batch(m.as_slice()) {
                     Ok(m) => {
                         if let Ok(mut mp) = message_pool.write() {
                             let messages_len = m.len();
-                            match mp.store_batch(m) {
+                            match mp.process_batch(m) {
                                 Ok(()) => {
-                                    info!("alpenglowMessagePool : push msgs {:?}", messages_len);
+                                    info!("alpenglowMessagePool : process msgs {:?}", messages_len);
                                 }
                                 Err(e) => {
                                     error!("alpenglowMessagePool : error({}) pushing msgs", e)
@@ -106,8 +107,8 @@ impl MessageProcesser {
 pub trait AlpenGlowMessagePool: Send + Sync {
     type PoolMessage;
     type Message: AlpenGlowMessage;
-    fn store(&mut self, msg: Self::Message) -> AlpenGlowResult<()>;
-    fn store_batch(&mut self, msgs: Vec<Self::Message>) -> AlpenGlowResult<()>;
+    fn process(&mut self, msg: Self::Message) -> AlpenGlowResult<()>;
+    fn process_batch(&mut self, msgs: Vec<Self::Message>) -> AlpenGlowResult<()>;
     fn get_msgs_by_type(&self, msg_type: MessageType) -> &[Self::PoolMessage];
     fn get_vote_messages_by_block_hash(&self, block_hash: Hash) -> Vec<&Self::PoolMessage>;
     fn get_vote_messages_by_slot(&self, slot: Slot) -> Vec<&Self::PoolMessage>;
@@ -122,6 +123,7 @@ pub mod solana_alpenglow_message {
         sync::{Arc, RwLock},
     };
 
+    use crossbeam::channel::Sender;
     use solana_pubkey::Pubkey;
     use tracing::{error, info, warn};
 
@@ -137,8 +139,8 @@ pub mod solana_alpenglow_message {
     pub struct SolanaMessage {
         sender: SocketAddrV4,
         receiver: SocketAddrV4,
-        message_type: MessageType,
         message_len: u16,
+        message_type: MessageType,
         data: Vec<u8>,
     }
 
@@ -268,9 +270,7 @@ pub mod solana_alpenglow_message {
                         .map_err(|_| AlpenGlowError::InvalidMessage)?,
                 );
 
-                println!("message len {}", message_len);
-
-                let read_end_index = cur + 32 + 2 + 1 + message_len as usize;
+                let read_end_index = cur + 6 + 6 + 2 + 1 + message_len as usize;
 
                 match Self::unpack(&bytes[cur..read_end_index]) {
                     Ok(m) => {
@@ -373,9 +373,9 @@ pub mod solana_alpenglow_message {
     }
 
     impl PingMessage {
-        const LEN: u16 = 32 + 32;
+        const MIN_LEN: u16 = 32;
         pub unsafe fn unpack(bytes: &[u8]) -> AlpenGlowResult<PingMessage> {
-            if bytes.len() as u16 != Self::LEN {
+            if (bytes.len() as u16) < Self::MIN_LEN {
                 return Err(AlpenGlowError::InvalidMessage);
             }
             let node_address = Pubkey::new_from_array(
@@ -384,7 +384,7 @@ pub mod solana_alpenglow_message {
                     .map_err(|_| AlpenGlowError::InvalidMessage)?,
             );
 
-            let message = bytes[32..64].to_vec();
+            let message = bytes[32..bytes.len()].to_vec();
 
             let ping_msg = Self {
                 node_address,
@@ -409,24 +409,104 @@ pub mod solana_alpenglow_message {
 
         pub fn log(&self) {
             info!(
-                "PingMessage(node {}, message : {}",
+                "PingMessage(node {}, message : {})",
                 self.node_address.to_string(),
                 String::from_utf8_lossy(&self.message).to_string(),
             )
         }
     }
 
+    pub struct AckMessage {
+        sender: Pubkey,
+        receiver: Pubkey,
+    }
+
+    impl AckMessage {
+        const LEN: u16 = 32 + 32;
+        pub unsafe fn unpack(bytes: &[u8]) -> AlpenGlowResult<AckMessage> {
+            if (bytes.len() as u16) != Self::LEN {
+                return Err(AlpenGlowError::InvalidMessage);
+            }
+            let sender_node_address = Pubkey::new_from_array(
+                bytes[0..32]
+                    .try_into()
+                    .map_err(|_| AlpenGlowError::InvalidMessage)?,
+            );
+
+            let receiver_node_address = Pubkey::new_from_array(
+                bytes[0..32]
+                    .try_into()
+                    .map_err(|_| AlpenGlowError::InvalidMessage)?,
+            );
+
+            let ack_msg = Self {
+                sender: sender_node_address,
+                receiver: receiver_node_address,
+            };
+            Ok(ack_msg)
+        }
+
+        pub fn pack(&self) -> Vec<u8> {
+            let mut buf = Vec::new();
+
+            buf.extend_from_slice(self.sender.as_array());
+
+            buf.extend_from_slice(self.receiver.as_array());
+
+            buf
+        }
+
+        pub fn from_solana_message(msg: &SolanaMessage) -> AlpenGlowResult<AckMessage> {
+            unsafe { AckMessage::unpack(&msg.data) }
+        }
+
+        pub fn log(&self) {
+            info!(
+                "ACKMessage(sender_node {}, receiver_node : {})",
+                self.sender.to_string(),
+                self.receiver.to_string(),
+            )
+        }
+    }
+
     pub struct SolanaMessagePool {
+        node_address: Pubkey,
+        msg_sender: Sender<Vec<SolanaMessage>>,
         pub vote_messages: Vec<VoteMessage>,
-        pub ping_messages: Vec<PingMessage>,
     }
 
     impl SolanaMessagePool {
-        pub fn init() -> Arc<RwLock<Self>> {
+        pub fn init(msg_sender: &Sender<Vec<SolanaMessage>>, node: Pubkey) -> Arc<RwLock<Self>> {
             Arc::new(RwLock::new(Self {
+                node_address: node,
                 vote_messages: Vec::new(),
-                ping_messages: Vec::new(),
+                msg_sender: msg_sender.clone(),
             }))
+        }
+
+        pub fn node(&self) -> &Pubkey {
+            &self.node_address
+        }
+
+        pub fn send_ack(&self, msg_sender: Pubkey) {
+            let ack_msg = AckMessage {
+                sender: msg_sender,
+                receiver: *self.node(),
+            }
+            .pack();
+
+            // match self.msg_sender.send(ack_msg) {
+            //     Ok(_) => {
+            //         info!("ACK msg sent to {}", msg_sender.to_string());
+            //     }
+            //     Err(e) => {
+            //         error!("err sending ack msg to {}", msg_sender.to_string());
+            //     }
+            // }
+        }
+
+        pub fn msg_sender(&self) -> &Sender<Vec<SolanaMessage>> {
+            &self.msg_sender
         }
     }
 
@@ -434,13 +514,13 @@ pub mod solana_alpenglow_message {
         type PoolMessage = VoteMessage;
         type Message = SolanaMessage;
 
-        fn store(&mut self, msg: SolanaMessage) -> AlpenGlowResult<()> {
+        fn process(&mut self, msg: SolanaMessage) -> AlpenGlowResult<()> {
             let vote_msg = VoteMessage::from_solana_message(&msg)?;
             self.vote_messages.push(vote_msg);
             Ok(())
         }
 
-        fn store_batch(&mut self, msgs: Vec<SolanaMessage>) -> AlpenGlowResult<()> {
+        fn process_batch(&mut self, msgs: Vec<SolanaMessage>) -> AlpenGlowResult<()> {
             for m in msgs {
                 match m.message_type {
                     MessageType::Vote => match VoteMessage::from_solana_message(&m) {
@@ -453,7 +533,6 @@ pub mod solana_alpenglow_message {
                     MessageType::Ping => match PingMessage::from_solana_message(&m) {
                         Ok(m) => {
                             m.log();
-                            self.ping_messages.push(m);
                         }
                         Err(e) => println!("err {:?}", e),
                     },

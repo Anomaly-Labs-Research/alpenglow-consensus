@@ -5,8 +5,8 @@ use alpenglow_consensus::{
         MessageProcesser,
         solana_alpenglow_message::{SolanaMessage, SolanaMessagePool},
     },
-    network::QuicServer,
-    node::solana_alpenglow_node::SolanaNode,
+    network::{QuicClient, QuicServer},
+    node::{self, AlpenGlowNode, solana_alpenglow_node::SolanaNode},
 };
 
 fn main() -> AlpenGlowResult<()> {
@@ -16,19 +16,18 @@ fn main() -> AlpenGlowResult<()> {
 
     let config = AlpenGlowConfig::parse();
 
-    println!("config {:?}", config);
+    let (quic_client_handle, msg_sender) = QuicClient::spawn::<SolanaMessage>(&config);
 
-    let (_node, _msgs_receiver) = SolanaNode::init(&config)?;
+    let node = SolanaNode::init(&config, &msg_sender)?;
 
-    // let quic_client_handle = QuicClient::spawn::<SolanaMessage>(&config, msgs_receiver);
+    let (quic_server_handle, msg_receiver) = QuicServer::spawn(&config);
 
-    let (quic_server_handle, rx) = QuicServer::spawn(&config)?;
+    let message_pool = SolanaMessagePool::init(&msg_sender, node.pubkey());
 
-    let message_pool = SolanaMessagePool::init();
+    let message_handle =
+        MessageProcesser::spawn_with_receiver::<SolanaMessage>(&msg_receiver, message_pool);
 
-    let message_handle = MessageProcesser::spawn_with_receiver::<SolanaMessage>(rx, message_pool);
-
-    for h in [quic_server_handle, message_handle] {
+    for h in [quic_client_handle, quic_server_handle, message_handle] {
         h.join().expect("err joining thread");
     }
 

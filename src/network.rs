@@ -12,7 +12,7 @@ use crate::{
     error::{AlpenGlowError, AlpenGlowResult},
     message::AlpenGlowMessage,
 };
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam::channel::{self, Receiver, Sender};
 use quinn::{
     ClientConfig, Endpoint, ServerConfig, VarInt,
     crypto::rustls::QuicClientConfig,
@@ -22,7 +22,7 @@ use quinn::{
     },
 };
 use tokio::task;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 pub const CLOSE_CONN_MESSAGE: &[u8] = b"CLOSE_CONN";
 
@@ -33,9 +33,7 @@ pub const MAX_QUIC_MESSAGE_BYTES: u64 = 1024 * 100;
 pub struct QuicServer;
 
 impl QuicServer {
-    pub fn spawn(
-        config: &Arc<AlpenGlowConfig>,
-    ) -> AlpenGlowResult<(JoinHandle<()>, Receiver<Vec<u8>>)> {
+    pub fn spawn(config: &Arc<AlpenGlowConfig>) -> (JoinHandle<()>, Receiver<Vec<u8>>) {
         let (tx, rx) = crossbeam::channel::unbounded::<Vec<u8>>();
         let config = Arc::clone(&config);
         let handle = thread::spawn(|| {
@@ -52,7 +50,7 @@ impl QuicServer {
                 Err(e) => error!("err {:?}", e),
             }
         });
-        Ok((handle, rx))
+        (handle, rx)
     }
 
     pub async fn spawn_inner(
@@ -106,7 +104,7 @@ impl QuicServer {
                                 }
                                 Err(e) => {
                                     connection.close(CLOSE_CONN_CODE, CLOSE_CONN_MESSAGE);
-                                    error!("closing conn - {}", e.to_string());
+                                    debug!("Connection : {}", e.to_string());
                                     break;
                                 }
                             }
@@ -132,10 +130,9 @@ pub struct QuicClient;
 impl QuicClient {
     pub fn spawn<T: AlpenGlowMessage + 'static>(
         config: &Arc<AlpenGlowConfig>,
-        msgs_receiver: Receiver<Vec<T>>,
-    ) -> JoinHandle<()> {
+    ) -> (JoinHandle<()>, Sender<Vec<T>>) {
         let config = Arc::clone(&config);
-        println!("spawn client");
+        let (tx, rx) = channel::unbounded::<Vec<T>>();
         let handle = thread::spawn(|| {
             info!("spawn : quicClientProcessorThread");
             match tokio::runtime::Builder::new_current_thread()
@@ -144,13 +141,13 @@ impl QuicClient {
                 .build()
                 .map_err(|_| AlpenGlowError::InvalidQuicConfig)
                 .unwrap()
-                .block_on(Self::spawn_inner(config, msgs_receiver))
+                .block_on(Self::spawn_inner(config, rx))
             {
                 Ok(_) => {}
                 Err(e) => error!("err {:?}", e),
             }
         });
-        handle
+        (handle, tx)
     }
 
     pub async fn spawn_inner<T: AlpenGlowMessage + 'static>(
