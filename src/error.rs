@@ -4,6 +4,7 @@ pub enum AlpenGlowError {
     InvalidKeypair,
     InvalidQuicConfig,
     InvalidMessage,
+    InvalidNetworkConfig,
 }
 
 pub type AlpenGlowResult<T> = Result<T, AlpenGlowError>;
@@ -14,6 +15,7 @@ impl Debug for AlpenGlowError {
             AlpenGlowError::InvalidKeypair => "Invalid Keypair",
             AlpenGlowError::InvalidQuicConfig => "Invalid Quic Config",
             AlpenGlowError::InvalidMessage => "Invalid Message",
+            AlpenGlowError::InvalidNetworkConfig => "Invalid Network config",
         };
 
         write(f, format_args!("{}", err_str))
@@ -26,6 +28,7 @@ impl Display for AlpenGlowError {
             AlpenGlowError::InvalidKeypair => "Invalid Keypair",
             AlpenGlowError::InvalidQuicConfig => "Invalid Quic Config",
             AlpenGlowError::InvalidMessage => "Invalid Message",
+            AlpenGlowError::InvalidNetworkConfig => "Invalid Network config",
         };
 
         write(f, format_args!("{}", err_str))

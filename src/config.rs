@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::{fs, net::SocketAddr, str::FromStr, sync::Arc};
 
+use crate::consensus::Stake;
+
 #[derive(Debug, Deserialize)]
 struct ServerConfigToml {
     port: u16,
@@ -21,10 +23,16 @@ struct KeysConfig {
 }
 
 #[derive(Debug, Deserialize)]
+struct Peers {
+    peers: Vec<(String, String, Stake)>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AlpenGlowConfig {
     server: ServerConfigToml,
     client: ClientConfigToml,
     keys: KeysConfig,
+    peers: Peers,
 }
 
 impl AlpenGlowConfig {
@@ -75,5 +83,9 @@ impl AlpenGlowConfig {
 
     pub fn ed25519_key_path(&self) -> String {
         self.keys.ed25519_key_path.clone()
+    }
+
+    pub fn get_peers(&self) -> Vec<(String, String, Stake)> {
+        self.peers.peers.clone()
     }
 }

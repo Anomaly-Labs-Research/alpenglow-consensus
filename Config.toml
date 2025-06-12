@@ -6,6 +6,8 @@ host = "127.0.0.1"
 port = 4434
 host = "127.0.0.1"
 
+[peers]
+peers = [["BbUnoX5gsfg3MbkC1jbWLXuCnkprB1om9DaqPfYbhRu2", "127.0.0.1:4422", 10]]
 
 [keys]
 rsa_cert_path = "keys/rsa-cert.pem"

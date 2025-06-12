@@ -10,7 +10,7 @@ crossbeam = "0.8.4"
 quinn = "0.11.8"
 serde = { version = "1.0.219", features = ["derive"] }
 solana-keypair = "2.2.1"
-solana-pubkey = { version = "2.4.0" }
+solana-pubkey = "2.4.0"
 solana-signature = "2.3.0"
 solana-signer = "2.2.1"
 tokio = { version = "1.45.1", features = [

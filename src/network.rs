@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
-    net::{SocketAddr, SocketAddrV4},
+    marker::PhantomData,
+    mem,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
     str::FromStr,
     sync::Arc,
     thread::{self, JoinHandle},
@@ -9,6 +11,7 @@ use std::{
 
 use crate::{
     config::AlpenGlowConfig,
+    consensus::PeerPoolSync,
     error::{AlpenGlowError, AlpenGlowResult},
     message::AlpenGlowMessage,
 };
@@ -30,10 +33,244 @@ pub const CLOSE_CONN_CODE: VarInt = VarInt::from_u32(0);
 
 pub const MAX_QUIC_MESSAGE_BYTES: u64 = 1024 * 100;
 
+pub fn pack_socket_addr(addr: &SocketAddr) -> Vec<u8> {
+    match addr {
+        SocketAddr::V4(addr) => pack_socket_addr_v4(addr),
+        SocketAddr::V6(addr) => pack_socket_addr_v6(addr),
+    }
+}
+
+pub fn pack_socket_addr_v4(addr: &SocketAddrV4) -> Vec<u8> {
+    let ip = addr.ip().octets();
+    let port: [u8; 2] = addr.port().to_le_bytes().try_into().expect("err ip");
+
+    let mut buffer = Vec::new();
+
+    buffer.extend_from_slice(&ip);
+    buffer.extend_from_slice(&port);
+
+    buffer
+}
+
+pub fn pack_socket_addr_v6(addr: &SocketAddrV6) -> Vec<u8> {
+    let ip = addr.ip().octets();
+    let port: [u8; 2] = addr.port().to_le_bytes().try_into().expect("err ip");
+
+    let mut buffer = Vec::new();
+
+    buffer.extend_from_slice(&ip);
+    buffer.extend_from_slice(&port);
+
+    buffer
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum SockertAddrType {
+    Ipv4,
+    Ipv6,
+}
+
+impl SockertAddrType {
+    fn from_u8(data: u8) -> Self {
+        match data {
+            0 => Self::Ipv4,
+            1 => Self::Ipv6,
+            _ => panic!("invalid socket addr type"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AlpenGlowNetworkMessage<T: AlpenGlowMessage> {
+    pub socket_addr_type: SockertAddrType,
+    pub sender: SocketAddr,
+    pub receiver: SocketAddr,
+    pub data: Vec<u8>,
+    _t: PhantomData<T>,
+}
+
+impl<T: AlpenGlowMessage> AlpenGlowNetworkMessage<T> {
+    pub fn get_metadata_len(byte: u8) -> usize {
+        match SockertAddrType::from_u8(byte) {
+            SockertAddrType::Ipv4 => 1 + 2 * mem::size_of::<SocketAddrV4>(),
+            SockertAddrType::Ipv6 => 1 + 2 * mem::size_of::<SocketAddrV6>(),
+        }
+    }
+
+    pub fn get_payload_len(bytes: &[u8]) -> AlpenGlowResult<u16> {
+        Ok(u16::from_le_bytes(
+            bytes[0..2]
+                .try_into()
+                .map_err(|_| AlpenGlowError::InvalidMessage)?,
+        ))
+    }
+
+    pub fn socket_addr_type(&self) -> u8 {
+        self.socket_addr_type as u8
+    }
+
+    pub fn sender(&self) -> &SocketAddr {
+        &self.sender
+    }
+
+    pub fn receiver(&self) -> &SocketAddr {
+        &self.receiver
+    }
+
+    pub fn pack(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        buffer.push(self.socket_addr_type());
+
+        buffer.extend_from_slice(&pack_socket_addr(&self.sender));
+
+        buffer.extend_from_slice(&pack_socket_addr(&self.receiver));
+
+        buffer.extend_from_slice(&self.data);
+
+        buffer
+    }
+
+    pub fn unpack(bytes: &[u8]) -> AlpenGlowResult<Self> {
+        let socket_addr_type = SockertAddrType::from_u8(bytes[0]);
+        let (sender, receiver, data_start_index) = match socket_addr_type {
+            SockertAddrType::Ipv4 => {
+                let sender = {
+                    let ip = (bytes[1], bytes[2], bytes[3], bytes[4]);
+                    let port = u16::from_le_bytes(
+                        bytes[5..7]
+                            .try_into()
+                            .map_err(|_| AlpenGlowError::InvalidMessage)?,
+                    );
+
+                    SocketAddrV4::new(Ipv4Addr::new(ip.0, ip.1, ip.2, ip.3), port)
+                };
+
+                let receiver = {
+                    let ip = (bytes[7], bytes[8], bytes[9], bytes[10]);
+                    let port = u16::from_le_bytes(
+                        bytes[11..13]
+                            .try_into()
+                            .map_err(|_| AlpenGlowError::InvalidMessage)?,
+                    );
+
+                    SocketAddrV4::new(Ipv4Addr::new(ip.0, ip.1, ip.2, ip.3), port)
+                };
+
+                (SocketAddr::from(sender), SocketAddr::from(receiver), 13)
+            }
+            // SockertAddrType::Ipv6 => {
+            //     let sender = {
+            //         let ip = (
+            //             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+            //             bytes[7],
+            //         );
+            //         let port = u16::from_le_bytes(
+            //             bytes[8..10]
+            //                 .try_into()
+            //                 .map_err(|_| AlpenGlowError::InvalidMessage)?,
+            //         );
+
+            //         SocketAddrV6::new(
+            //             Ipv6Addr::new(ip.0, ip.1, ip.2, ip.3, ip.4, ip.5, ip.6, ip.7),
+            //             port,
+            //         )
+            //     };
+
+            //     let receiver = {
+            //         let ip = (bytes[6], bytes[7], bytes[8], bytes[9]);
+            //         let port = u16::from_le_bytes(
+            //             bytes[10..12]
+            //                 .try_into()
+            //                 .map_err(|_| AlpenGlowError::InvalidMessage)?,
+            //         );
+
+            //         SocketAddrV4::new(Ipv4Addr::new(ip.0, ip.1, ip.2, ip.3), port)
+            //     };
+            // }
+            _ => panic!("not impl"),
+        };
+
+        Ok(Self {
+            socket_addr_type,
+            sender: sender,
+            receiver: receiver,
+            data: bytes[data_start_index..].to_vec(),
+            _t: PhantomData,
+        })
+    }
+
+    pub fn strip_network_meta(bytes: Vec<u8>) -> AlpenGlowResult<Vec<u8>> {
+        let mut msg_buffer = Vec::new();
+
+        if bytes.len() as u64 > MAX_QUIC_MESSAGE_BYTES {
+            return Err(AlpenGlowError::InvalidMessage);
+        }
+
+        let end = bytes.len();
+        let mut cur = 0;
+
+        while cur < end {
+            let metadata_len = AlpenGlowNetworkMessage::<T>::get_metadata_len(bytes[0]);
+
+            let payload_data_len_start = metadata_len + 2 * mem::size_of::<T::Address>();
+
+            let read_end_index = cur
+                + metadata_len
+                + T::MESSAGE_META_LENGTH
+                + AlpenGlowNetworkMessage::<T>::get_payload_len(
+                    &bytes[(payload_data_len_start)..(payload_data_len_start + 2)],
+                )? as usize;
+
+            match Self::unpack(&bytes[cur..read_end_index]) {
+                Ok(m) => {
+                    msg_buffer.extend_from_slice(&m.data);
+                }
+                Err(e) => error!("error unpacking {}", e),
+            }
+
+            cur = read_end_index;
+        }
+
+        Ok(msg_buffer)
+    }
+}
+
+impl<T: AlpenGlowMessage> AlpenGlowNetworkMessage<T> {
+    fn from_message_with_config(
+        msg: &T,
+        config: &Arc<AlpenGlowConfig>,
+        peer_pool: &PeerPoolSync<T>,
+    ) -> AlpenGlowResult<Self> {
+        let sender = SocketAddr::from_str(config.client_addr_with_port().as_str())
+            .map_err(|_| AlpenGlowError::InvalidNetworkConfig)?;
+
+        let receiver = peer_pool
+            .read()
+            .map(|p| p.get_peer_ip(msg.receiver()))
+            .ok()
+            .flatten();
+
+        match receiver {
+            Some(r) => Ok(Self {
+                socket_addr_type: SockertAddrType::Ipv4,
+                sender,
+                receiver: r,
+                data: msg.pack(),
+                _t: PhantomData,
+            }),
+            None => Err(AlpenGlowError::InvalidNetworkConfig),
+        }
+    }
+}
+
 pub struct QuicServer;
 
 impl QuicServer {
-    pub fn spawn(config: &Arc<AlpenGlowConfig>) -> (JoinHandle<()>, Receiver<Vec<u8>>) {
+    pub fn spawn<T: AlpenGlowMessage>(
+        config: &Arc<AlpenGlowConfig>,
+    ) -> (JoinHandle<()>, Receiver<Vec<u8>>) {
         let (tx, rx) = crossbeam::channel::unbounded::<Vec<u8>>();
         let config = Arc::clone(&config);
         let handle = thread::spawn(|| {
@@ -44,7 +281,7 @@ impl QuicServer {
                 .build()
                 .map_err(|_| AlpenGlowError::InvalidQuicConfig)
                 .unwrap()
-                .block_on(Self::spawn_inner(config, tx))
+                .block_on(Self::spawn_inner::<T>(config, tx))
             {
                 Ok(_) => {}
                 Err(e) => error!("err {:?}", e),
@@ -53,7 +290,7 @@ impl QuicServer {
         (handle, rx)
     }
 
-    pub async fn spawn_inner(
+    pub async fn spawn_inner<T: AlpenGlowMessage>(
         config: Arc<AlpenGlowConfig>,
         tx: Sender<Vec<u8>>,
     ) -> AlpenGlowResult<()> {
@@ -95,10 +332,16 @@ impl QuicServer {
                             match connection.accept_uni().await {
                                 Ok(mut recv) => {
                                     match recv.read_to_end(MAX_QUIC_MESSAGE_BYTES as usize).await {
-                                        Ok(d) => match tx.send(d) {
-                                            Ok(_) => {}
-                                            Err(e) => error!("chan : send_err {}", e),
-                                        },
+                                        Ok(d) => {
+                                            if let Ok(msg_data) =
+                                                AlpenGlowNetworkMessage::<T>::strip_network_meta(d)
+                                            {
+                                                match tx.send(msg_data) {
+                                                    Ok(_) => {}
+                                                    Err(e) => error!("chan : send_err {}", e),
+                                                }
+                                            }
+                                        }
                                         Err(e) => error!("err reading bytes {}", e),
                                     }
                                 }
@@ -130,9 +373,11 @@ pub struct QuicClient;
 impl QuicClient {
     pub fn spawn<T: AlpenGlowMessage + 'static>(
         config: &Arc<AlpenGlowConfig>,
+        peer_pool: &PeerPoolSync<T>,
     ) -> (JoinHandle<()>, Sender<Vec<T>>) {
         let config = Arc::clone(&config);
         let (tx, rx) = channel::unbounded::<Vec<T>>();
+        let peer_pool = Arc::clone(&peer_pool);
         let handle = thread::spawn(|| {
             info!("spawn : quicClientProcessorThread");
             match tokio::runtime::Builder::new_current_thread()
@@ -141,7 +386,7 @@ impl QuicClient {
                 .build()
                 .map_err(|_| AlpenGlowError::InvalidQuicConfig)
                 .unwrap()
-                .block_on(Self::spawn_inner(config, rx))
+                .block_on(Self::spawn_inner(config, peer_pool, rx))
             {
                 Ok(_) => {}
                 Err(e) => error!("err {:?}", e),
@@ -152,6 +397,7 @@ impl QuicClient {
 
     pub async fn spawn_inner<T: AlpenGlowMessage + 'static>(
         config: Arc<AlpenGlowConfig>,
+        peer_pool: PeerPoolSync<T>,
         msg_receiver: Receiver<Vec<T>>,
     ) -> AlpenGlowResult<()> {
         // Build client endpoint at configured address
@@ -175,14 +421,19 @@ impl QuicClient {
         let endpoint = Arc::new(client_endpoint);
 
         while let Ok(msgs) = msg_receiver.recv() {
-            let mut msgs_receiver_map: HashMap<SocketAddrV4, Vec<T>> = HashMap::new();
+            let mut msgs_receiver_map: HashMap<SocketAddr, Vec<AlpenGlowNetworkMessage<T>>> =
+                HashMap::new();
 
             for m in msgs {
-                let receiver = m.receiver();
-                if let Some(buf) = msgs_receiver_map.get_mut(receiver) {
-                    buf.push(m);
-                } else {
-                    msgs_receiver_map.insert(*receiver, vec![m]);
+                if let Ok(network_msg) =
+                    AlpenGlowNetworkMessage::<T>::from_message_with_config(&m, &config, &peer_pool)
+                {
+                    let receiver = network_msg.receiver();
+                    if let Some(buf) = msgs_receiver_map.get_mut(receiver) {
+                        buf.push(network_msg);
+                    } else {
+                        msgs_receiver_map.insert(*receiver, vec![network_msg]);
+                    }
                 }
             }
 
@@ -212,11 +463,11 @@ impl QuicClient {
     pub async fn send_msgs(
         client: &Endpoint,
         data: Vec<u8>,
-        receiver: SocketAddrV4,
+        receiver: SocketAddr,
     ) -> AlpenGlowResult<()> {
         // connect to server
         let connection = client
-            .connect(SocketAddr::V4(receiver), "localhost")
+            .connect(receiver, "localhost")
             .unwrap()
             .await
             .unwrap();
