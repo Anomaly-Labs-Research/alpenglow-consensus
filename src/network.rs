@@ -31,7 +31,7 @@ pub const CLOSE_CONN_MESSAGE: &[u8] = b"CLOSE_CONN";
 
 pub const CLOSE_CONN_CODE: VarInt = VarInt::from_u32(0);
 
-pub const MAX_QUIC_MESSAGE_BYTES: u64 = 1024 * 100;
+pub const MAX_QUIC_MESSAGE_BYTES: u64 = 1_500; // 1500 bytes
 
 pub fn pack_socket_addr(addr: &SocketAddr) -> Vec<u8> {
     match addr {

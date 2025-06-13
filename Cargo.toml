@@ -7,6 +7,7 @@ edition = "2024"
 bs58 = "0.5.1"
 bytemuck = { version = "1.23.0", features = ["derive"] }
 crossbeam = "0.8.4"
+merkle_light = "0.4.0"
 quinn = "0.11.8"
 serde = { version = "1.0.219", features = ["derive"] }
 solana-keypair = "2.2.1"

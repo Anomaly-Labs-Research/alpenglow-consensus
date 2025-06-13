@@ -33,7 +33,7 @@ pub trait AlpenGlowMessage: Debug + Sized + Sync + Send {
 
 pub type MessageLen = u16;
 
-pub type IdenHash = [u8; 64];
+pub type AlpenGlowHash = [u8; 64];
 
 pub type Slot = u64;
 
@@ -121,7 +121,9 @@ pub mod solana_alpenglow_message {
 
     use crate::{
         error::{AlpenGlowError, AlpenGlowResult},
-        message::{AlpenGlowMessage, AlpenGlowMessagePool, MessageLen, MessageType, Slot},
+        message::{
+            AlpenGlowHash, AlpenGlowMessage, AlpenGlowMessagePool, MessageLen, MessageType, Slot,
+        },
         network::MAX_QUIC_MESSAGE_BYTES,
     };
 
@@ -285,7 +287,7 @@ pub mod solana_alpenglow_message {
     pub struct VoteMessage {
         pub voter_address: Pubkey,
         pub vote: bool,
-        pub block: [u8; 64],
+        pub block: AlpenGlowHash,
         pub slot: Slot,
     }
 
@@ -301,7 +303,7 @@ pub mod solana_alpenglow_message {
                     .map_err(|_| AlpenGlowError::InvalidMessage)?,
             );
             let vote = bytes[32] > 0;
-            let block: [u8; 64] = bytes[33..97]
+            let block: AlpenGlowHash = bytes[33..97]
                 .try_into()
                 .map_err(|_| AlpenGlowError::InvalidMessage)?;
 
@@ -523,7 +525,7 @@ pub mod solana_alpenglow_message {
         //     }
         // }
 
-        // fn get_vote_messages_by_block_hash(&self, block_hash: [u8; 64]) -> Vec<&VoteMessage> {
+        // fn get_vote_messages_by_block_hash(&self, block_hash: AlpenGlowHash) -> Vec<&VoteMessage> {
         //     self.vote_messages
         //         .iter()
         //         .filter(|v| v.block == block_hash)
